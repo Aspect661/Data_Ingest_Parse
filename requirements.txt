@@ -13,4 +13,6 @@ pandas
 numpy
 python-docx
 docx2txt
-unstructured[docx]
+unstructured[docx,xlsx]
+pandas
+openpyxl
