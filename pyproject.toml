@@ -27,4 +27,5 @@ dependencies = [
     "docx2txt>=0.9",
     "unstructured[docx]>=0.24.1",
     "openpyxl>=3.1.5",
+    "jq>=1.12.0",
 ]
