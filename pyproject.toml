@@ -28,4 +28,11 @@ dependencies = [
     "unstructured[docx]>=0.24.1",
     "openpyxl>=3.1.5",
     "jq>=1.12.0",
+    "matplotlib>=3.11.0",
+    "langchain-huggingface>=1.2.2",
+]
+
+[tool.uv]
+constraint-dependencies = [
+    "numba<0.63,>=0.62.1",
 ]
