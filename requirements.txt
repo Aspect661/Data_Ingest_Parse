@@ -1,4 +1,6 @@
 langchain
+langchain-classic
+langchain-text-splitters
 langchain-groq
 faiss-cpu
 tiktoken
