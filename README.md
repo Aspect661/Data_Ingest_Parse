@@ -1,138 +1,235 @@
 # RAG Course — Data Ingestion, Embeddings & Vector Stores
 
-Hands-on notebooks working through the first half of a Retrieval-Augmented Generation (RAG) pipeline: turning raw files into LangChain `Document` objects, converting text into vector embeddings, and storing/querying those vectors for semantic retrieval. Each stage builds on the last:
+Hands-on notebooks for the first half of a Retrieval-Augmented Generation (RAG) pipeline: load raw files into LangChain `Document` objects, turn text into vector embeddings, store those vectors in ChromaDB, and build question-answering chains (including LCEL, conversational memory, and Groq LLMs). Each stage builds on the last:
 
 ```
-raw files (PDF, DOCX, CSV, JSON, SQL)
+raw files (TXT, PDF, DOCX, CSV, Excel, JSON, SQL)
         │  0-DataIngestParsing
         ▼
-LangChain Document objects
+LangChain Document objects (+ splitting strategies)
         │  1-VectorEmbeddings
         ▼
 numeric vectors (HuggingFace / OpenAI embeddings)
         │  2-Vector Stores
         ▼
-ChromaDB vector store  →  retriever  →  RAG chain (LLM answers grounded in your docs)
+ChromaDB  →  retriever  →  RAG chains
+              ├── create_retrieval_chain (classic helpers)
+              ├── LCEL pipe (retriever | prompt | llm)
+              ├── conversational / history-aware RAG
+              └── swap LLMs (OpenAI gpt-3.5-turbo ↔ Groq)
 ```
+
+Remote: [Aspect661/RAG_Pipeline_Learning](https://github.com/Aspect661/RAG_Pipeline_Learning)
+
+---
 
 ## Repo structure
 
 ```
 .
-├── 0-DataIngestParsing/     # Load raw files into Document objects
-├── 1-VectorEmbeddings/      # Turn text into vectors, compare models
-├── 2-Vector Stores/         # Store vectors in ChromaDB, build a full RAG chain
-├── main.py                  # Placeholder entry point (not used by the notebooks)
-├── pyproject.toml           # uv-managed project & dependency spec
-├── requirements.txt         # Flat pip-installable dependency list (kept in sync manually)
-├── uv.lock                  # uv's resolved lockfile
-└── .python-version          # Python 3.11
+├── 0-DataIngestParsing/          # Load & parse files → Document objects
+│   ├── 1-dataingestion.ipynb     # Document object, TextLoader, DirectoryLoader, splitters
+│   ├── 2-dataparsing.ipynb       # PDF loaders + SmartPDFProcessor
+│   ├── 3-dataparsingdoc.ipynb    # Word (.docx) loaders
+│   ├── 4-csvexcelparsing.ipynb   # CSV / Excel loaders + custom processors
+│   ├── 5-jsonparsing.ipynb       # JSON / JSONL loaders + custom flattener
+│   ├── 6-databaseparsing.ipynb   # SQLite → Documents
+│   └── data/                     # Sample files (created/used by notebooks)
+│       ├── text_files/           # machine_learning.txt, python_intro.txt
+│       ├── pdf/                  # attention.pdf
+│       ├── word_files/           # proposal.docx / proposal.txt
+│       ├── structured_files/     # products.csv, inventory.xlsx
+│       ├── json_files/           # company_data.json, events.jsonl
+│       └── databases/            # company.db (SQLite)
+├── 1-VectorEmbeddings/           # Embeddings from first principles + OpenAI
+│   ├── embedding.ipynb           # HuggingFace / sentence-transformers (offline-capable)
+│   └── openaiembeddings.ipynb    # OpenAIEmbeddings + semantic search
+├── 2-Vector Stores/              # ChromaDB + full RAG systems
+│   ├── 1-chromadb.ipynb          # End-to-end RAG notebook (main deliverable)
+│   ├── data/                     # Sample .txt articles written by the notebook
+│   └── chroma_db/                # Persisted Chroma collection (generated locally)
+├── main.py                       # Placeholder (`Hello from udemy-ragcourse!`); unused by notebooks
+├── pyproject.toml                # uv project name `udemy-ragcourse`, deps, Python ≥3.11
+├── requirements.txt              # Flat dependency list (kept in sync manually)
+├── uv.lock                       # Locked resolutions for `uv sync`
+├── .python-version               # 3.11
+├── .gitignore                    # Ignores `.venv`, `.env`, `__pycache__/`, build artifacts
+├── .env                          # Local secrets (git-ignored) — OpenAI + Groq API keys
+├── .vscode/settings.json         # Excludes `.venv` from analysis / file watching / search
+└── .venv/                        # Created by `uv sync` (not committed)
 ```
 
 ---
 
 ## 0. Data Ingestion & Parsing
 
-Loading raw files of various formats (PDF, DOCX, CSV, Excel, JSON, SQL) into LangChain `Document` objects — the first stage of a RAG pipeline. Each notebook compares a **built-in LangChain loader** against a **custom parsing function**, so you can see the trade-offs between convenience and control.
+Loading raw files into LangChain `Document` objects — the first stage of a RAG pipeline. Most notebooks compare a **built-in LangChain loader** against a **custom parsing function**, so you can see convenience vs. control.
 
-| Notebook | Topic | Built-in loader(s) | Custom approach |
+| Notebook | Topic | Built-in loader(s) | Custom / extra approach |
 |---|---|---|---|
-| `1-dataingestion.ipynb` | Intro to the `Document` object | — | Manually constructing `Document(page_content=..., metadata=...)` and inspecting its structure |
-| `2-dataparsing.ipynb` | PDF parsing | `PyPDFLoader`, `PyMuPDFLoader` | Comparing page-by-page extraction and metadata across loaders |
-| `3-dataparsingdoc.ipynb` | Word document parsing | `Docx2txtLoader`, `UnstructuredWordDocumentLoader` | Comparing plain-text extraction vs. element-aware parsing |
-| `4-csvexcelparsing.ipynb` | CSV & Excel parsing | `CSVLoader`, `UnstructuredExcelLoader` | `process_csv_intelligently()` (row → structured prose) and `process_excel_with_pandas()` (sheet-aware documents) |
-| `5-jsonparsing.ipynb` | JSON / JSONL parsing | `JSONLoader` (with `jq_schema`) | `process_json_intelligently()` — flattens nested employee/project records into natural-language profiles |
-| `6-databaseparsing.ipynb` | SQL database parsing | `SQLDatabase` utility | `sql_to_documents()` — per-table overviews plus a synthesized employee↔project relationship document via SQL `JOIN` |
+| `1-dataingestion.ipynb` | Intro to `Document`, loading text, splitting | `TextLoader`, `DirectoryLoader` | Manually build `Document(page_content=..., metadata=...)`; compare `CharacterTextSplitter`, `RecursiveCharacterTextSplitter` (recommended), and token-based splitting |
+| `2-dataparsing.ipynb` | PDF parsing & cleaning | `PyPDFLoader`, `PyMuPDFLoader` | Page-by-page comparison; `clean_text()` for whitespace/ligatures; `SmartPDFProcessor` (clean → skip empty pages → chunk with richer metadata) |
+| `3-dataparsingdoc.ipynb` | Word document parsing | `Docx2txtLoader`, `UnstructuredWordDocumentLoader` | Plain-text extraction vs. element-aware / unstructured parsing |
+| `4-csvexcelparsing.ipynb` | CSV & Excel | `CSVLoader`, `UnstructuredCSVLoader`, `UnstructuredExcelLoader` | `process_csv_intelligently()` (row → structured prose + metadata); `process_excel_with_pandas()` (one document per sheet) |
+| `5-jsonparsing.ipynb` | JSON / JSONL | `JSONLoader` (with `jq_schema`) | `process_json_intelligently()` — flattens nested employee/project records into natural-language profiles |
+| `6-databaseparsing.ipynb` | SQL (SQLite) | `SQLDatabase`, `SQLDatabaseLoader` | `sql_to_documents()` — per-table overviews plus a synthesized employee↔project relationship document via SQL `JOIN` |
 
-**Recurring theme:** built-in loaders parse a format mechanically (they don't know your schema), while custom loaders let you encode domain knowledge — natural-language phrasing, joins across tables, nested-structure flattening — at the cost of more code to maintain and brittleness to schema changes. See notebooks 4–6 for the clearest side-by-side comparisons.
+**Recurring theme:** built-in loaders parse a format mechanically (they don't know your schema). Custom loaders let you encode domain knowledge — natural-language phrasing, joins, nested-structure flattening — at the cost of more code and schema brittleness. Notebooks 4–6 show this most clearly.
 
-**Data:** sample files are generated by the notebooks themselves into `0-DataIngestParsing/data/`:
+**Data layout** under `0-DataIngestParsing/data/`:
 
 ```
 data/
-├── pdf/               # attention.pdf (sample paper for PDF parsing)
+├── text_files/        # simple .txt samples for TextLoader / DirectoryLoader
+├── pdf/               # attention.pdf
 ├── word_files/        # proposal.docx / proposal.txt
 ├── structured_files/  # products.csv, inventory.xlsx
 ├── json_files/        # company_data.json, events.jsonl
 └── databases/         # company.db (SQLite)
 ```
 
-Just run each notebook top-to-bottom; earlier cells create the sample files that later cells parse.
+Run each notebook top-to-bottom; earlier cells create many of the sample files that later cells parse.
 
 ---
 
 ## 1. Vector Embeddings
 
-Turning text into numeric vectors, understanding similarity, and comparing embedding models/providers.
+Turning text into numeric vectors, measuring similarity, and comparing embedding models/providers.
 
 | Notebook | Topic |
 |---|---|
-| `embedding.ipynb` | Embeddings from first principles: a toy 2D word-embedding plot, `cosine_similarity()` implemented from scratch, then a real embedding model — `HuggingFaceEmbeddings` (`sentence-transformers/all-MiniLM-L6-v2`) — used to embed single texts and batches. Wraps up comparing five popular `sentence-transformers` models (`all-MiniLM-L6-v2`, `all-mpnet-base-v2`, `all-MiniLM-L12-v2`, `multi-qa-MiniLM-L6-cos-v1`, `paraphrase-multilingual-MiniLM-L12-v2`) by dimensions, quality, and use case. |
-| `openaiembeddings.ipynb` | Same ideas using `OpenAIEmbeddings` (`text-embedding-ada-002` / `text-embedding-3-small`): single & batch embedding, a model comparison table (`ada-002` vs. `text-embedding-3-small` vs. `text-embedding-3-large` — dimensions, cost per 1M tokens, use case), pairwise cosine similarity across a set of sentences, and a hand-rolled `semantic_search()` function that ranks a small document set against a query by embedding similarity. |
+| `embedding.ipynb` | Embeddings from first principles: a toy 2D word-embedding plot with matplotlib; `cosine_similarity()` from scratch; then `HuggingFaceEmbeddings` via `langchain_huggingface` (`sentence-transformers/all-MiniLM-L6-v2`) for single and batch embeds. Ends by comparing five popular `sentence-transformers` models (`all-MiniLM-L6-v2`, `all-mpnet-base-v2`, `all-MiniLM-L12-v2`, `multi-qa-MiniLM-L6-cos-v1`, `paraphrase-multilingual-MiniLM-L12-v2`) on dimensions, quality, and use case. |
+| `openaiembeddings.ipynb` | Same ideas with `OpenAIEmbeddings` (`text-embedding-ada-002` / `text-embedding-3-small`): single & batch embedding; model comparison table (`ada-002` vs. `text-embedding-3-small` vs. `text-embedding-3-large` — dimensions, cost per 1M tokens, use case); pairwise cosine similarity; hand-rolled `semantic_search()` that ranks a small document set against a query. |
 
-**Requires** an `OPENAI_API_KEY` in a root-level `.env` file (loaded via `python-dotenv`) for `openaiembeddings.ipynb`. `embedding.ipynb` runs fully offline using local HuggingFace models.
+**API keys:** `openaiembeddings.ipynb` needs `OPENAI_API_KEY` in the root `.env` (loaded with `python-dotenv`). `embedding.ipynb` can run offline with local HuggingFace / sentence-transformers models (first run downloads weights).
 
 ---
 
 ## 2. Vector Stores
 
-Building a complete, working RAG system end-to-end with ChromaDB as the vector store.
+`2-Vector Stores/1-chromadb.ipynb` builds a working RAG system end-to-end with ChromaDB, then extends it with LCEL, incremental document adds, conversational memory, and Groq.
 
-`1-chromadb.ipynb` walks through:
+### Pipeline walkthrough
 
-1. **Sample data** — three short articles (ML fundamentals, deep learning, NLP) written to `2-Vector Stores/data/*.txt`.
-2. **Document loading** — `DirectoryLoader` + `TextLoader` load all `.txt` files in `data/`.
-3. **Document splitting** — `RecursiveCharacterTextSplitter` (chunk size 500, overlap 50) breaks documents into chunks.
-4. **Embedding** — chunks are embedded with `OpenAIEmbeddings`.
-5. **Vector storage** — `Chroma.from_documents()` persists the embedded chunks to `./chroma_db` (collection `rag_collection`).
-6. **Similarity search** — plain `similarity_search()` and `similarity_search_with_score()` (ChromaDB's default L2 distance — lower score = more similar).
-7. **RAG chain** — a retriever (`vectorstore.as_retriever(k=3)`) is combined with a `ChatPromptTemplate` and `gpt-3.5-turbo` (via `init_chat_model`) using `create_stuff_documents_chain` + `create_retrieval_chain` to build a full retrieval-augmented question-answering chain, then queried with a batch of test questions.
+1. **Sample data** — three short articles (ML fundamentals, deep learning / neural nets, NLP) written to `2-Vector Stores/data/doc_0.txt` … `doc_2.txt`.
+2. **Document loading** — `DirectoryLoader` + `TextLoader` load all `.txt` files under `data/`.
+3. **Document splitting** — `RecursiveCharacterTextSplitter` (`chunk_size=500`, `chunk_overlap=50`, space separators) produces overlapping chunks.
+4. **Embedding** — `OpenAIEmbeddings` (needs `OPENAI_API_KEY`).
+5. **Vector storage** — `Chroma.from_documents(...)` persists embeddings to `./chroma_db` with collection name `rag_collection`.
+6. **Similarity search** — `similarity_search()` and `similarity_search_with_score()`. Chroma’s default distance is **L2** (lower score = more similar; `0` = identical).
+7. **LLM setup** — `ChatOpenAI(model_name="gpt-3.5-turbo", ...)` and/or `init_chat_model("openai:gpt-3.5-turbo")`.
+8. **Classic RAG chain** — `vectorstore.as_retriever(search_kwargs={"k": 3})` + `ChatPromptTemplate` + `create_stuff_documents_chain` + `create_retrieval_chain`. Invoke with `{"input": "..."}`; response includes `answer` and retrieved `context`.
+9. **LCEL RAG chain** — pipe `{context: retriever | format_docs, question: RunnablePassthrough()} | prompt | llm | StrOutputParser()`. Invoke with a plain string. Fetch sources separately via `retriever.invoke(question)` (not the removed `get_relevant_documents`).
+10. **Add documents** — append new content (e.g. a reinforcement-learning article) into the existing Chroma collection and query again.
+11. **Conversational / history-aware RAG** — `create_history_aware_retriever` reformulates follow-ups using chat history (`MessagesPlaceholder`, `HumanMessage` / `AIMessage`), then `create_retrieval_chain(history_aware_retriever, question_answer_chain)` answers with memory of prior turns.
+12. **Groq LLMs** — load `GROQ_API_KEY` from `.env`; construct `ChatGroq(model="qwen/qwen3.6-27b")` or `init_chat_model(model="groq:qwen/qwen3.6-27b")` as an OpenAI substitute.
 
-**Generated locally (not meant to be hand-edited):**
+### Generated locally (safe to delete and recreate)
+
 - `2-Vector Stores/data/` — sample `.txt` files created by the notebook
-- `2-Vector Stores/chroma_db/` — ChromaDB's persisted vector store (SQLite + HNSW index files)
+- `2-Vector Stores/chroma_db/` — Chroma persistence (SQLite + HNSW index files)
 
-Both are recreated by re-running the notebook top-to-bottom, so it's safe to delete them to start fresh.
-
-> **Note on LangChain versions:** this project pins `langchain>=1.3.13`, a major-version rewrite where several import paths changed from older LangChain tutorials/courses. In this codebase: text splitters live in `langchain_text_splitters`, `Document` lives in `langchain_core.documents`, and chain helpers like `create_retrieval_chain` / `create_stuff_documents_chain` live in `langchain_classic.chains` (not `langchain.chains`). If you copy snippets from older docs, expect `ModuleNotFoundError` and adjust the import path accordingly.
+Re-run the notebook top-to-bottom to regenerate both.
 
 ---
 
 ## Setup
 
-This project's virtual environment is managed with [`uv`](https://github.com/astral-sh/uv) (there is no `pip` binary inside `.venv`). From the repo root:
+### Prerequisites
+
+- Python **3.11** (see `.python-version`; `pyproject.toml` requires `>=3.11`)
+- [`uv`](https://github.com/astral-sh/uv) recommended
+
+### Install dependencies
+
+From the repo root:
 
 ```bash
 uv sync
 ```
 
-or, using the flat requirements file:
+This creates `.venv` with CPython 3.11 and installs everything from `uv.lock` / `pyproject.toml`.
+
+Alternatively, with the flat requirements file:
 
 ```bash
 uv pip install -r requirements.txt
 ```
 
+Activate the venv (optional if you use `uv run`):
+
+```bash
+source .venv/bin/activate
+```
+
 ### Environment variables
 
-Create a `.env` file in the repo root (already git-ignored) with:
+Create a root-level `.env` (already listed in `.gitignore`):
 
 ```
 OPENAI_API_KEY="sk-..."
+GROQ_API_KEY="gsk_..."
 ```
 
-Needed by any notebook using `OpenAIEmbeddings` or `ChatOpenAI` (all of `1-VectorEmbeddings/openaiembeddings.ipynb` and `2-Vector Stores/1-chromadb.ipynb`).
+| Key | Used by |
+|---|---|
+| `OPENAI_API_KEY` | `1-VectorEmbeddings/openaiembeddings.ipynb`; embeddings + `ChatOpenAI` / `init_chat_model("openai:...")` in `2-Vector Stores/1-chromadb.ipynb` |
+| `GROQ_API_KEY` | Groq section at the end of `1-chromadb.ipynb` (`ChatGroq` / `init_chat_model("groq:...")`) |
 
-### Notes on a few extras
+Load with `python-dotenv` (`load_dotenv()`) at the top of notebooks that need keys.
 
-- **Excel writing/reading** (`pd.ExcelWriter`, `pd.read_excel`) needs `openpyxl`.
-- **`UnstructuredExcelLoader`** needs the `unstructured[xlsx]` extra (pulls in `msoffcrypto-tool`, `xlrd`, etc.) — plain `unstructured[docx]` is not enough for `.xlsx` files.
-- **`JSONLoader`** needs the `jq` package (used for `jq_schema` queries).
-- **`langchain_classic`** and **`langchain_text_splitters`** are imported directly in `2-Vector Stores/1-chromadb.ipynb` and are pinned explicitly in `requirements.txt` (they'd otherwise only be pulled in transitively via `langchain-community`).
+### Jupyter / Cursor kernel
 
-All of these are already pinned in [`requirements.txt`](requirements.txt) / [`pyproject.toml`](pyproject.toml).
+Notebooks expect the **`udemy-ragcourse`** kernel (Python 3.11 from this project’s `.venv`). Register once after `uv sync`:
 
-After installing new packages into the venv, restart the Jupyter kernel before re-running notebook cells so it picks up the changes.
+```bash
+source .venv/bin/activate
+python -m ipykernel install --user --name=udemy-ragcourse --display-name="udemy-ragcourse"
+```
 
-### Kernel
+In Cursor / VS Code, pick that kernel from the picker in the top-right of each notebook. After installing new packages, **restart the kernel** before re-running cells.
 
-Notebooks use the `udemy-ragcourse` kernel (Python 3.11, this project's `.venv`). In VS Code, select it via the kernel picker in the top-right of each notebook.
+`.vscode/settings.json` excludes `.venv` from Pyright analysis, file watching, and search so the IDE stays responsive.
+
+### Notes on a few packages
+
+- **Excel** (`pd.ExcelWriter`, `pd.read_excel`) needs `openpyxl`.
+- **`UnstructuredExcelLoader`** needs the `unstructured[xlsx]` extra (pulls in tools like `msoffcrypto-tool`, `xlrd`); plain `unstructured[docx]` is not enough for `.xlsx`.
+- **`JSONLoader`** with `jq_schema` needs the `jq` package.
+- **`langchain-classic`** and **`langchain-text-splitters`** are used directly in the notebooks and listed in `requirements.txt` (they may only appear transitively via `langchain-community` otherwise).
+- **`langchain-huggingface`** is required for `HuggingFaceEmbeddings` in `embedding.ipynb`.
+- **`faiss-cpu`**, **`tiktoken`**, **`chromadb`**, **`sentence-transformers`**, **`pypdf`**, **`pymupdf`**, etc. are declared in `pyproject.toml` / `requirements.txt` for the loaders and vector-store work above.
+
+---
+
+## LangChain 1.x import & API gotchas
+
+This project pins **`langchain>=1.3.13`**, a major rewrite. Snippets from older tutorials often break. Use these paths:
+
+| What you need | Correct import / API |
+|---|---|
+| Text splitters | `langchain_text_splitters` (e.g. `RecursiveCharacterTextSplitter`) |
+| `Document` | `langchain_core.documents` |
+| Prompt / messages / LCEL | `langchain_core.prompts`, `langchain_core.messages`, `langchain_core.runnables`, `langchain_core.output_parsers` |
+| `create_retrieval_chain`, `create_history_aware_retriever` | `langchain_classic.chains` (**not** `langchain.chains`) |
+| `create_stuff_documents_chain` | `langchain_classic.chains.combine_documents` |
+| Community loaders / Chroma / SQL utils | `langchain_community.document_loaders`, `langchain_community.vectorstores`, `langchain_community.utilities` |
+| OpenAI chat & embeddings | `langchain_openai` (`ChatOpenAI`, `OpenAIEmbeddings`) |
+| HuggingFace embeddings | `langchain_huggingface` (`HuggingFaceEmbeddings`) |
+| Groq chat | `langchain_groq` (`ChatGroq`) |
+| Retriever document fetch | `retriever.invoke(query)` — **`get_relevant_documents` was removed** |
+| Classic RAG invoke | `rag_chain.invoke({"input": "..."})` → `result["answer"]`, `result["context"]` |
+| LCEL RAG invoke | `rag_chain_lcel.invoke("...")` (string in, string out when using `StrOutputParser`) |
+| Conversational RAG invoke | `conversational_rag_chain.invoke({"input": "...", "chat_history": [...]})` |
+
+If you see `ModuleNotFoundError: No module named 'langchain.chains'` or `AttributeError: ... get_relevant_documents`, update the import/call as in the table above (the notebook already uses the fixed forms where we hit these).
+
+---
+
+## Suggested study order
+
+1. `0-DataIngestParsing/1-dataingestion.ipynb` → … → `6-databaseparsing.ipynb`
+2. `1-VectorEmbeddings/embedding.ipynb` → `openaiembeddings.ipynb`
+3. `2-Vector Stores/1-chromadb.ipynb` (classic chain → LCEL → add docs → conversational memory → Groq)
+
+Each section assumes the concepts (and often the mental model of `Document` → embed → retrieve → generate) from the previous one.
